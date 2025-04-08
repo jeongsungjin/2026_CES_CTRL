@@ -26,5 +26,6 @@ def visualize_sequence(npy_path, interval=0.1):
     plt.show()
 
 if __name__ == "__main__":
-    npy_file = "/home/ctrl1/2026_CES_CTRL/sequence_data/sequence.npy"
+    # npy_file = "/home/ctrl1/2026_CES_CTRL/sequence_data/sequence.npy"
+    npy_file = "/home/ctrl1/2026_CES_CTRL/sequence_data/sequence1.npy"
     visualize_sequence(npy_file)

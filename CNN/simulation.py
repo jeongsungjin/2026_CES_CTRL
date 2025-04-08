@@ -1,4 +1,3 @@
-
 import numpy as np
 import random
 import os
@@ -12,7 +11,7 @@ GRAY_CAR_VALUE = 100
 
 ROAD_THICKNESS = 4
 NUM_FRAMES = 500
-SAVE_PATH = '/home/ctrl1/2026_CES_CTRL/sequence_data/sequence.npy'
+SAVE_PATH = '/home/ctrl1/2026_CES_CTRL/sequence_data/sequence1.npy'
 
 VEHICLE_SIZE_LONG = 3
 VEHICLE_SIZE_SHORT = 2
@@ -117,7 +116,7 @@ class Vehicle:
         return any(px in INTERSECTION_AREA for px in self.get_pixels())
 
     def move(self, road_map, others):
-        for _ in range(2 if self.v_type == 'gray' else 1):  # gray 차량은 2배속
+        for _ in range(2 if self.v_type == 'gray' else 1):
             self._move_once(road_map, others)
 
     def _move_once(self, road_map, others):
@@ -138,6 +137,19 @@ class Vehicle:
         self.snap_to_lane()
 
         dx, dy = vec[self.direction]
+
+        # ---------------- 흰 차량 앞 두 칸 확인 ----------------
+        if self.v_type == 'white':
+            for step in range(1, 3):
+                check_r = old_center[0] + dx * step
+                check_c = old_center[1] + dy * step
+                check_pixels = get_vehicle_pixels(check_r - self.height // 2, check_c - self.width // 2, self.height, self.width)
+                for o in others:
+                    if set(check_pixels) & set(o.get_pixels()):
+                        self.stuck += 1
+                        return  # 한 프레임 멈춤
+        # ------------------------------------------------------
+
         new_center = (self.center_position()[0] + dx, self.center_position()[1] + dy)
         self.set_position_centered(*new_center)
 
@@ -227,7 +239,7 @@ class Vehicle:
 def run_simulation():
     road_map = create_map()
 
-    NUM_VEHICLES = 30
+    NUM_VEHICLES = 20
     DIRECTIONS = ['up', 'down', 'left', 'right']
     TYPES = ['white', 'gray']
 
