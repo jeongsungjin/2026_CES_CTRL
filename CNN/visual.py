@@ -1,36 +1,30 @@
-# visualize_sequence.py
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 import os
 
-def visualize_sequence(frames, pause_time=0.1):
+def visualize_sequence(npy_path, interval=0.1):
+    if not os.path.exists(npy_path):
+        print(f"파일이 존재하지 않습니다: {npy_path}")
+        return
+
+    sequence = np.load(npy_path)  # shape: (100, 64, 64)
+    num_frames = sequence.shape[0]
+
+    plt.ion()  # interactive 모드
     fig, ax = plt.subplots()
-    img_plot = ax.imshow(frames[0], cmap='gray', vmin=0, vmax=1)
-    ax.axis('off')
-    title = ax.set_title("Frame 0")
+    img = ax.imshow(sequence[0], cmap='gray', vmin=0, vmax=255)
+    ax.set_title("Frame 0")
+    
+    for i in range(num_frames):
+        img.set_data(sequence[i])
+        ax.set_title(f"Frame {i}")
+        plt.draw()
+        plt.pause(interval)  # interval 초 대기 (예: 0.1초 = 100ms)
 
-    for i, frame in enumerate(frames):
-        img_plot.set_data(frame)
-        title.set_text(f"Frame {i}")
-        plt.pause(pause_time)
-
+    plt.ioff()
     plt.show()
 
 if __name__ == "__main__":
-    folder_path = r"C:\Users\user\Desktop\2025CES\sequences"  # 시퀀스 폴더
-    file_index = 49  # 몇 번째 시퀀스를 볼지 선택 (0부터 시작)
-
-    # 파일 리스트 불러오기
-    npy_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.npy')])
-    
-    if not npy_files:
-        print(f"❌ .npy 파일을 찾을 수 없습니다: {folder_path}")
-    else:
-        selected_file = npy_files[file_index]
-        input_path = os.path.join(folder_path, selected_file)
-
-        dataset = np.load(input_path)
-        print(f"✅ 시퀀스 로드 완료: {selected_file}")
-        print(f"✅ shape: {dataset.shape}")  # (100, 64, 64)
-
-        visualize_sequence(dataset)
+    npy_file = "/home/ctrl1/2026_CES_CTRL/sequence_data/sequence.npy"
+    visualize_sequence(npy_file)
