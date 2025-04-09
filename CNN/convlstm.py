@@ -52,11 +52,9 @@ class ConvLSTM(nn.Module):
         b, seq_len, c, h, w = input_tensor.size()
         h_t, c_t = self.encoder.init_hidden(b, (h, w))
 
-        # Encoding
         for t in range(seq_len):
             h_t, c_t = self.encoder(input_tensor[:, t], (h_t, c_t))
 
-        # Decoding
         outputs = []
         decoder_input = input_tensor[:, -1]
         for _ in range(self.pred_frames):
@@ -136,37 +134,52 @@ def evaluate(model, dataloader, criterion, device):
     return total_loss / len(dataloader)
 
 # ==========================
-# Visualization
+# Visualization (개선)
 # ==========================
-def visualize_prediction(x_seq, y_target, y_pred, epoch):
+def draw_grid(ax, size=64, color='gray'):
+    for x in range(0, size, 8):
+        ax.axhline(x, color=color, linewidth=0.3)
+        ax.axvline(x, color=color, linewidth=0.3)
+
+def visualize_prediction(x_seq, y_target, y_pred, epoch, threshold=0.5, save_npy=True):
     pred_frames = y_pred.shape[0]
-    fig, axs = plt.subplots(3, pred_frames, figsize=(4 * pred_frames, 9))
+    fig, axs = plt.subplots(2, pred_frames, figsize=(4 * pred_frames, 6))
+
     for i in range(pred_frames):
-        axs[0, i].imshow(y_target[i, 0], cmap='gray')
-        axs[0, i].set_title(f"GT BG {i+1}")
+        # Row 1: GT Road
+        axs[0, i].imshow(y_target[i, 1], cmap='gray')
+        axs[0, i].set_title(f"GT Road {i+1}")
         axs[0, i].axis('off')
 
-        axs[1, i].imshow(y_target[i, 1], cmap='gray')
-        axs[1, i].set_title(f"GT Road {i+1}")
-        axs[1, i].axis('off')
+        # Row 2: Pred Road + Vehicle Overlay
+        pred_road = torch.sigmoid(torch.tensor(y_pred[i, 1])).numpy()
+        pred_vehicle = torch.sigmoid(torch.tensor(y_pred[i, 2])).numpy()
 
-        axs[2, i].imshow(torch.sigmoid(torch.tensor(y_pred[i, 2])).numpy(), cmap='gray')
-        axs[2, i].set_title(f"Pred Vehicle {i+1}")
-        axs[2, i].axis('off')
+        overlay = np.zeros((*pred_road.shape, 3), dtype=np.float32)
+        overlay[:, :, 0] = pred_vehicle  # red channel: vehicle
+        overlay[:, :, 1] = pred_road     # green channel: road
+        axs[1, i].imshow(overlay)
+        draw_grid(axs[1, i], size=pred_vehicle.shape[0])
+        axs[1, i].set_title(f"Pred Overlay {i+1}")
+        axs[1, i].axis('off')
 
     plt.tight_layout()
     os.makedirs("visuals", exist_ok=True)
     plt.savefig(f"visuals/prediction_epoch_{epoch}.png")
     plt.close()
 
+    if save_npy:
+        os.makedirs("predictions", exist_ok=True)
+        np.save(f"predictions/pred_epoch_{epoch}.npy", y_pred)
+
 # ==========================
 # Main
 # ==========================
 def main():
-    npy_file = "vehicle_like_sequence_300.npy"
-    input_frames = 10
+    npy_file = "/home/ctrl1/2026_CES_CTRL/seq_000.npy"
+    input_frames = 30
     pred_frames = 5
-    batch_size = 8
+    batch_size = 4
     epochs = 30
     lr = 1e-3
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -193,7 +206,7 @@ def main():
                 x_seq, y_target = dataset[0]
                 x_seq = x_seq.unsqueeze(0).to(device)
                 y_pred = model(x_seq).squeeze(0).cpu().numpy()
-                visualize_prediction(x_seq[0].cpu().numpy(), y_target.numpy(), y_pred, epoch + 1)
+                visualize_prediction(x_seq[0].cpu().numpy(), y_target.numpy(), y_pred, epoch + 1, threshold=0.5)
 
 if __name__ == "__main__":
     main()

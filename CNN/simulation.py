@@ -10,7 +10,7 @@ ROAD_VALUE = 50
 ROAD_THICKNESS = 4
 NUM_FRAMES = 3000  # ✅ 프레임 수 변경
 NUM_SEQUENCES = 100  # ✅ 시퀀스 수 추가
-SAVE_DIR = 'C://Users//user//Desktop//2025CES//sequence_data'
+SAVE_DIR = 'C://home//ctrl1//2026_CES_CTRL//sequence_data'
 
 VEHICLE_SIZE_LONG = 3
 VEHICLE_SIZE_SHORT = 2
