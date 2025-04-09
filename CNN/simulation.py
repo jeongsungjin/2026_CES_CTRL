@@ -6,12 +6,11 @@ import os
 MAP_SIZE = 64
 BACKGROUND_VALUE = 0
 ROAD_VALUE = 50
-WHITE_CAR_VALUE = 255
-GRAY_CAR_VALUE = 100
 
 ROAD_THICKNESS = 4
-NUM_FRAMES = 500
-SAVE_PATH = '/home/ctrl1/2026_CES_CTRL/sequence_data/sequence1.npy'
+NUM_FRAMES = 3000  # ✅ 프레임 수 변경
+NUM_SEQUENCES = 100  # ✅ 시퀀스 수 추가
+SAVE_DIR = 'C://Users//user//Desktop//2025CES//sequence_data'
 
 VEHICLE_SIZE_LONG = 3
 VEHICLE_SIZE_SHORT = 2
@@ -57,12 +56,12 @@ def is_road(pixels, road_map):
     return True
 
 class Vehicle:
-    def __init__(self, r, c, direction, v_type):
+    def __init__(self, r, c, direction, v_type, vehicle_id):
         self.r = r
         self.c = c
         self.direction = direction
         self.v_type = v_type
-        self.color = WHITE_CAR_VALUE if v_type == 'white' else GRAY_CAR_VALUE
+        self.vehicle_id = vehicle_id
 
         self.set_size_by_direction()
         self.stuck = 0
@@ -138,7 +137,6 @@ class Vehicle:
 
         dx, dy = vec[self.direction]
 
-        # ---------------- 흰 차량 앞 두 칸 확인 ----------------
         if self.v_type == 'white':
             for step in range(1, 3):
                 check_r = old_center[0] + dx * step
@@ -147,8 +145,7 @@ class Vehicle:
                 for o in others:
                     if set(check_pixels) & set(o.get_pixels()):
                         self.stuck += 1
-                        return  # 한 프레임 멈춤
-        # ------------------------------------------------------
+                        return
 
         new_center = (self.center_position()[0] + dx, self.center_position()[1] + dy)
         self.set_position_centered(*new_center)
@@ -236,47 +233,52 @@ class Vehicle:
                     self.set_size_by_direction()
                     self.set_position_centered(*old_center)
 
-def run_simulation():
+def run_simulation(seq_idx):
     road_map = create_map()
 
-    NUM_VEHICLES = 20
+    WHITE_VEHICLES = 5
+    GRAY_VEHICLES = 10
+    NUM_VEHICLES = WHITE_VEHICLES + GRAY_VEHICLES
     DIRECTIONS = ['up', 'down', 'left', 'right']
-    TYPES = ['white', 'gray']
+
+    vehicle_targets = (['white'] * WHITE_VEHICLES) + (['gray'] * GRAY_VEHICLES)
+    random.shuffle(vehicle_targets)
 
     vehicles = []
     tries = 0
     max_tries = NUM_VEHICLES * 10
+    next_id = 1
 
-    while len(vehicles) < NUM_VEHICLES and tries < max_tries:
+    while vehicle_targets and tries < max_tries:
         direction = random.choice(DIRECTIONS)
-        v_type = random.choice(TYPES)
-
+        v_type = vehicle_targets[0]
         r = random.randint(0, MAP_SIZE - VEHICLE_SIZE_LONG)
         c = random.randint(0, MAP_SIZE - VEHICLE_SIZE_LONG)
-        temp_vehicle = Vehicle(r, c, direction, v_type)
+        temp_vehicle = Vehicle(r, c, direction, v_type, next_id)
 
         if temp_vehicle.is_valid(road_map, vehicles):
             vehicles.append(temp_vehicle)
+            vehicle_targets.pop(0)
+            next_id += 1
 
         tries += 1
 
-    if len(vehicles) < NUM_VEHICLES:
-        print(f"⚠️ {NUM_VEHICLES}대 중 {len(vehicles)}대만 배치됨 (충돌 회피 실패)")
-
     frames = []
-    for frame_idx in range(NUM_FRAMES):
+    for _ in range(NUM_FRAMES):
         frame = road_map.copy()
         for v in vehicles:
             others = [o for o in vehicles if o != v]
             v.move(road_map, others)
         for v in vehicles:
             for (rr, cc) in v.get_pixels():
-                frame[rr, cc] = v.color
+                frame[rr, cc] = v.vehicle_id
         frames.append(frame)
 
-    os.makedirs(os.path.dirname(SAVE_PATH), exist_ok=True)
-    np.save(SAVE_PATH, np.array(frames, dtype=np.uint8))
-    print(f"✅ 저장 완료: {SAVE_PATH}")
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    save_file = os.path.join(SAVE_DIR, f"seq_{seq_idx:03d}.npy")
+    np.save(save_file, np.array(frames, dtype=np.uint8))
+    print(f"✅ 시퀀스 {seq_idx+1}/{NUM_SEQUENCES} 저장 완료: {save_file}")
 
 if __name__ == "__main__":
-    run_simulation()
+    for seq_idx in range(NUM_SEQUENCES):
+        run_simulation(seq_idx)

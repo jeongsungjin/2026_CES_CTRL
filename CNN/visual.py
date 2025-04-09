@@ -8,14 +8,16 @@ def visualize_sequence(npy_path, interval=0.1):
         print(f"파일이 존재하지 않습니다: {npy_path}")
         return
 
-    sequence = np.load(npy_path)  # shape: (100, 64, 64)
+    sequence = np.load(npy_path)  # shape: (num_frames, 64, 64)
     num_frames = sequence.shape[0]
 
     plt.ion()  # interactive 모드
     fig, ax = plt.subplots()
-    img = ax.imshow(sequence[0], cmap='gray', vmin=0, vmax=255)
+
+    # 컬러맵 변경: 차량 ID가 서로 다른 색으로 표시되도록
+    img = ax.imshow(sequence[0], cmap='tab20', vmin=0, vmax=np.max(sequence))
     ax.set_title("Frame 0")
-    
+
     for i in range(num_frames):
         img.set_data(sequence[i])
         ax.set_title(f"Frame {i}")
@@ -27,5 +29,5 @@ def visualize_sequence(npy_path, interval=0.1):
 
 if __name__ == "__main__":
     # npy_file = "/home/ctrl1/2026_CES_CTRL/sequence_data/sequence.npy"
-    npy_file = "/home/ctrl1/2026_CES_CTRL/sequence_data/sequence1.npy"
+    npy_file = 'C://Users//user//Desktop//2025CES//sequence_data.npy'
     visualize_sequence(npy_file)
