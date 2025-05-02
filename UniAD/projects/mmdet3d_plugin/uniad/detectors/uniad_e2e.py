@@ -12,21 +12,14 @@ import os
 from ..dense_heads.seg_head_plugin import IOU
 from .uniad_track import UniADTrack
 from mmdet.models.builder import build_head
-from mmdet3d.models import Base3DDetector
-from mmcv.runner import BaseModule
 
 @DETECTORS.register_module()
-class UniAD(Base3DDetector):
+class UniAD(UniADTrack):
     """
     UniAD: Unifying Detection, Tracking, Segmentation, Motion Forecasting, Occupancy Prediction and Planning for Autonomous Driving
     """
     def __init__(
         self,
-        use_bev_input=False,  # BEV 입력 사용 여부
-        bev_h=200,  # BEV 높이
-        bev_w=200,  # BEV 너비
-        bev_channels=3,  # BEV 이미지 채널 수
-        bev_normalize=True,  # BEV 이미지 정규화 여부
         seg_head=None,
         motion_head=None,
         occ_head=None,
@@ -40,13 +33,7 @@ class UniAD(Base3DDetector):
         ),
         **kwargs,
     ):
-        super().__init__(**kwargs)
-        self.use_bev_input = use_bev_input
-        self.bev_h = bev_h
-        self.bev_w = bev_w
-        self.bev_channels = bev_channels
-        self.bev_normalize = bev_normalize
-        
+        super(UniAD, self).__init__(**kwargs)
         if seg_head:
             self.seg_head = build_head(seg_head)
         if occ_head:
@@ -75,147 +62,6 @@ class UniAD(Base3DDetector):
     @property
     def with_seg_head(self):
         return hasattr(self, 'seg_head') and self.seg_head is not None
-
-    def check_bev_input(self, img):
-        """BEV 입력 검증"""
-        if not self.use_bev_input:
-            return
-        
-        # 차원 검사
-        assert img.dim() in [4, 5], f"BEV 이미지 차원이 올바르지 않습니다: {img.dim()}"
-        
-        # 크기 검사
-        if img.dim() == 4:
-            assert img.shape[2] == self.bev_h and img.shape[3] == self.bev_w
-        else:
-            assert img.shape[3] == self.bev_h and img.shape[4] == self.bev_w
-        
-        # 채널 수 검사
-        assert img.shape[1 if img.dim() == 4 else 2] == self.bev_channels, \
-            f"BEV 이미지 채널 수가 올바르지 않습니다. 예상: {self.bev_channels}, 실제: {img.shape[1 if img.dim() == 4 else 2]}"
-
-    def prepare_bev_input(self, img):
-        """BEV 입력 전처리"""
-        if not self.use_bev_input:
-            return img
-            
-        # 차원 변환
-        if img.dim() == 4:  # [B, C, H, W]
-            img = img.unsqueeze(1)  # [B, 1, C, H, W]로 변환
-        
-        # 정규화
-        if hasattr(self, 'bev_normalize'):
-            B, N, C, H, W = img.shape
-            img = img.reshape(B*N, C, H, W)
-            img = self.bev_normalize(img)
-            img = img.reshape(B, N, C, H, W)
-            
-        return img
-
-    def extract_img_feat(self, img, img_metas):
-        """Extract features of images."""
-        if self.use_bev_input:
-            # BEV 이미지가 이미 입력으로 들어온 경우
-            bev_embed = img
-            if self.bev_normalize:
-                bev_embed = (bev_embed - bev_embed.mean()) / (bev_embed.std() + 1e-6)
-            return bev_embed
-        else:
-            # 기존의 멀티 카메라 입력 처리
-            return super().extract_img_feat(img, img_metas)
-
-    def forward_train(self, img, img_metas, **kwargs):
-        """Forward function for training."""
-        # BEV 입력 처리
-        if self.use_bev_input:
-            bev_embed = img
-        else:
-            # 기존 멀티 카메라 입력 처리
-            x = self.backbone(img)
-            if self.neck is not None:
-                x = self.neck(x)
-            bev_embed = x[-1]
-            
-        # Track Head
-        track_losses = self.track_head.forward_train(bev_embed, img_metas, **kwargs)
-        
-        # Motion Head
-        motion_losses = self.motion_head.forward_train(bev_embed, img_metas, **kwargs)
-        
-        # Occ Head
-        occ_losses = self.occ_head.forward_train(bev_embed, img_metas, **kwargs)
-        
-        # Planning Head
-        planning_losses = self.planning_head.forward_train(bev_embed, img_metas, **kwargs)
-        
-        # 모든 손실 합치기
-        losses = dict()
-        losses.update(track_losses)
-        losses.update(motion_losses)
-        losses.update(occ_losses)
-        losses.update(planning_losses)
-        
-        return losses
-
-    def simple_test(self, img, img_metas, **kwargs):
-        """Test without augmentation."""
-        if self.use_bev_input:
-            bev_embed = self.extract_img_feat(img, img_metas)
-            return self.simple_test_with_bev(bev_embed, img_metas, **kwargs)
-        else:
-            return super().simple_test(img, img_metas, **kwargs)
-
-    def simple_test_with_bev(self, bev_embed, img_metas, **kwargs):
-        """Test without augmentation with BEV input."""
-        results = dict()
-        
-        # TrackFormer
-        track_results = self.track_head.simple_test(bev_embed, img_metas, **kwargs)
-        results.update(track_results)
-        
-        # MotionFormer
-        motion_results = self.motion_head.simple_test(bev_embed, img_metas, **kwargs)
-        results.update(motion_results)
-        
-        # OccFormer
-        occ_results = self.occ_head.simple_test(bev_embed, img_metas, **kwargs)
-        results.update(occ_results)
-        
-        # Planner
-        planning_results = self.planning_head.simple_test(bev_embed, img_metas, **kwargs)
-        results.update(planning_results)
-        
-        return results
-
-    def aug_test(self, imgs, img_metas, **kwargs):
-        """Test with augmentations."""
-        if self.use_bev_input:
-            bev_embed = self.extract_img_feat(imgs, img_metas)
-            return self.aug_test_with_bev(bev_embed, img_metas, **kwargs)
-        else:
-            return super().aug_test(imgs, img_metas, **kwargs)
-
-    def aug_test_with_bev(self, bev_embed, img_metas, **kwargs):
-        """Test with augmentations with BEV input."""
-        results = dict()
-        
-        # TrackFormer
-        track_results = self.track_head.aug_test(bev_embed, img_metas, **kwargs)
-        results.update(track_results)
-        
-        # MotionFormer
-        motion_results = self.motion_head.aug_test(bev_embed, img_metas, **kwargs)
-        results.update(motion_results)
-        
-        # OccFormer
-        occ_results = self.occ_head.aug_test(bev_embed, img_metas, **kwargs)
-        results.update(occ_results)
-        
-        # Planner
-        planning_results = self.planning_head.aug_test(bev_embed, img_metas, **kwargs)
-        results.update(planning_results)
-        
-        return results
 
     def forward_dummy(self, img):
         dummy_metas = None
@@ -310,19 +156,12 @@ class UniAD(Base3DDetector):
                 dict: Dictionary containing losses of different tasks, such as tracking, segmentation, motion prediction, occupancy prediction, and planning. Each key in the dictionary 
                     is prefixed with the corresponding task name, e.g., 'track', 'map', 'motion', 'occ', and 'planning'. The values are the calculated losses for each task.
         """
-        # BEV 입력 검증 및 전처리
-        if img is not None:
-            self.check_bev_input(img)
-            img = self.prepare_bev_input(img)
-
         losses = dict()
-        len_queue = img.size(1) if img is not None else 1
+        len_queue = img.size(1)
         
 
-        losses_track, outs_track = self.forward_track_train(
-            img, gt_bboxes_3d, gt_labels_3d, gt_past_traj, gt_past_traj_mask, gt_inds, gt_sdc_bbox, gt_sdc_label,
-            l2g_t, l2g_r_mat, img_metas, timestamp
-        )
+        losses_track, outs_track = self.forward_track_train(img, gt_bboxes_3d, gt_labels_3d, gt_past_traj, gt_past_traj_mask, gt_inds, gt_sdc_bbox, gt_sdc_label,
+                                                        l2g_t, l2g_r_mat, img_metas, timestamp)
         losses_track = self.loss_weighted_and_prefixed(losses_track, prefix='track')
         losses.update(losses_track)
         
@@ -415,11 +254,6 @@ class UniAD(Base3DDetector):
                     ):
         """Test function
         """
-        # BEV 입력 검증 및 전처리
-        if img is not None:
-            self.check_bev_input(img)
-            img = self.prepare_bev_input(img)
-
         for var, name in [(img_metas, 'img_metas')]:
             if not isinstance(var, list):
                 raise TypeError('{} must be a list, but got {}'.format(

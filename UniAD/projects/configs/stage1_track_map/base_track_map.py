@@ -80,11 +80,6 @@ train_gt_iou_threshold=0.3
 
 model = dict(
     type="UniAD",
-    use_bev_input=True,
-    bev_h=200,
-    bev_w=200,
-    bev_channels=3,
-    bev_normalize=True,
     gt_iou_threshold=train_gt_iou_threshold,
     queue_length=queue_length,
     use_grid_mask=True,
@@ -373,16 +368,17 @@ ann_file_test=info_root + f"nuscenes_infos_temporal_val.pkl"
 
 
 train_pipeline = [
-    dict(type="LoadBEVFromFile", to_float32=True),
+    dict(type="LoadMultiViewImageFromFilesInCeph", to_float32=True, file_client_args=file_client_args, img_root=data_root),
     dict(type="PhotoMetricDistortionMultiViewImage"),
     dict(
         type="LoadAnnotations3D_E2E",
         with_bbox_3d=True,
         with_label_3d=True,
         with_attr_label=False,
-        with_future_anns=True,
-        with_ins_inds_3d=True,
-        ins_inds_add_1=True,
+
+        with_future_anns=True,  # occ_flow gt
+        with_ins_inds_3d=True,  # ins_inds 
+        ins_inds_add_1=True,    # ins_inds start from 1
     ),
 
     dict(type='GenerateOccFlowLabels', grid_conf=occflow_grid_conf, ignore_index=255, only_vehicle=True, 
@@ -434,7 +430,8 @@ train_pipeline = [
     ),
 ]
 test_pipeline = [
-    dict(type="LoadBEVFromFile", to_float32=True),
+    dict(type='LoadMultiViewImageFromFilesInCeph', to_float32=True,
+            file_client_args=file_client_args, img_root=data_root),
     dict(type="NormalizeMultiviewImage", **img_norm_cfg),
     dict(type="PadMultiViewImage", size_divisor=32),
     dict(type='LoadAnnotations3D_E2E', 
@@ -487,9 +484,7 @@ data = dict(
     samples_per_gpu=1,
     workers_per_gpu=8,
     train=dict(
-        type='CarlaE2EDataset',
-        use_bev_input=True,
-        bev_size=(200, 200),
+        type=dataset_type,
         file_client_args=file_client_args,
         data_root=data_root,
         ann_file=ann_file_train,
@@ -516,9 +511,7 @@ data = dict(
         box_type_3d="LiDAR",
     ),
     val=dict(
-        type='CarlaE2EDataset',
-        use_bev_input=True,
-        bev_size=(200, 200),
+        type=dataset_type,
         file_client_args=file_client_args,
         data_root=data_root,
         ann_file=ann_file_val,
@@ -540,9 +533,7 @@ data = dict(
         occ_filter_invalid_sample=False,
     ),
     test=dict(
-        type='CarlaE2EDataset',
-        use_bev_input=True,
-        bev_size=(200, 200),
+        type=dataset_type,
         file_client_args=file_client_args,
         data_root=data_root,
         test_mode=True,

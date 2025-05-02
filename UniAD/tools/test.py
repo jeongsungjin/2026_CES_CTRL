@@ -220,9 +220,11 @@ def main():
         model.PALETTE = dataset.PALETTE
 
     if not distributed:
-        assert False
-        # model = MMDataParallel(model, device_ids=[0])
-        # outputs = single_gpu_test(model, data_loader, args.show, args.show_dir)
+        # assert False
+        model = model.cuda()  # 모델을 GPU로 이동
+        outputs = single_gpu_test(model, data_loader, args.show, args.show_dir)
+        torch.cuda.empty_cache()
+
     else:
         model = MMDistributedDataParallel(
             model.cuda(),
@@ -230,6 +232,8 @@ def main():
             broadcast_buffers=False)
         outputs = custom_multi_gpu_test(model, data_loader, args.tmpdir,
                                         args.gpu_collect)
+        torch.cuda.empty_cache()
+
 
     rank, _ = get_dist_info()
     if rank == 0:
@@ -258,5 +262,5 @@ def main():
 
 
 if __name__ == '__main__':
-    torch.multiprocessing.set_start_method('fork')
+    # torch.multiprocessing.set_start_method('fork')
     main()

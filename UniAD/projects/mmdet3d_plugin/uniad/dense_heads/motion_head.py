@@ -7,7 +7,7 @@
 import torch
 import copy
 from mmdet.models import HEADS
-from mmcv.runner import force_fp32, auto_fp16, BaseModule
+from mmcv.runner import force_fp32, auto_fp16
 from projects.mmdet3d_plugin.models.utils.functional import (
     bivariate_gaussian_activation,
     norm_points,
@@ -16,11 +16,10 @@ from projects.mmdet3d_plugin.models.utils.functional import (
 )
 from .motion_head_plugin.motion_utils import nonlinear_smoother
 from .motion_head_plugin.base_motion_head import BaseMotionHead
-import torch.nn as nn
 
 
 @HEADS.register_module()
-class MotionHead(BaseModule):
+class MotionHead(BaseMotionHead):
     """
     MotionHead module for a neural network, which predicts motion trajectories and is used in an autonomous driving task.
 
@@ -42,112 +41,49 @@ class MotionHead(BaseModule):
         vehicle_id_list(list[int]): class id of vehicle class, used for filtering out non-vehicle objects
     """
     def __init__(self,
-                 in_channels,
-                 num_frames=6,
-                 transformer=None,
-                 positional_encoding=None,
-                 loss_motion=None,
-                 train_cfg=None,
-                 test_cfg=None,
-                 init_cfg=None):
-        super().__init__(init_cfg)
-        self.in_channels = in_channels
-        self.num_frames = num_frames
-        self.train_cfg = train_cfg
-        self.test_cfg = test_cfg
+                 *args,
+                 predict_steps=12,
+                 transformerlayers=None,
+                 bbox_coder=None,
+                 num_cls_fcs=2,
+                 bev_h=30,
+                 bev_w=30,
+                 embed_dims=256,
+                 num_anchor=6,
+                 det_layer_num=6,
+                 group_id_list=[],
+                 pc_range=None,
+                 use_nonlinear_optimizer=False,
+                 anchor_info_path=None,
+                 loss_traj=dict(),
+                 num_classes=0,
+                 vehicle_id_list=[0, 1, 2, 3, 4, 6, 7],
+                 **kwargs):
+        super(MotionHead, self).__init__()
         
-        # Transformer 설정
-        self.transformer = transformer
-        self.positional_encoding = positional_encoding
+        self.bev_h = bev_h
+        self.bev_w = bev_w
+        self.num_cls_fcs = num_cls_fcs - 1
+        self.num_reg_fcs = num_cls_fcs - 1
+        self.embed_dims = embed_dims        
+        self.num_anchor = num_anchor
+        self.num_anchor_group = len(group_id_list)
         
-        # Loss 설정
-        self.loss_motion = loss_motion
+        # we merge the classes into groups for anchor assignment
+        self.cls2group = [0 for i in range(num_classes)]
+        for i, grouped_ids in enumerate(group_id_list):
+            for gid in grouped_ids:
+                self.cls2group[gid] = i
+        self.cls2group = torch.tensor(self.cls2group)
+        self.pc_range = pc_range
+        self.predict_steps = predict_steps
+        self.vehicle_id_list = vehicle_id_list
         
-        # 출력 레이어
-        self.trajectory_embed = MLP(in_channels, in_channels, 2 * num_frames, 3)
-        
-    def forward_train(self, bev_embed, img_metas, **kwargs):
-        """Forward function for training."""
-        # BEV 특징 추출
-        if isinstance(bev_embed, (list, tuple)):
-            bev_embed = bev_embed[-1]
-            
-        # 위치 인코딩
-        pos_embed = self.positional_encoding(bev_embed)
-        
-        # Transformer 처리
-        hs = self.transformer(bev_embed, pos_embed)
-        
-        # 궤적 예측
-        trajectories = self.trajectory_embed(hs)
-        
-        # 손실 계산
-        losses = self.loss(trajectories, img_metas, **kwargs)
-        
-        return losses
-        
-    def forward_test(self, bev_embed, img_metas, **kwargs):
-        """Forward function for testing."""
-        # BEV 특징 추출
-        if isinstance(bev_embed, (list, tuple)):
-            bev_embed = bev_embed[-1]
-            
-        # 위치 인코딩
-        pos_embed = self.positional_encoding(bev_embed)
-        
-        # Transformer 처리
-        hs = self.transformer(bev_embed, pos_embed)
-        
-        # 궤적 예측
-        trajectories = self.trajectory_embed(hs)
-        
-        # 결과 생성
-        results = self.get_trajectories(trajectories, img_metas, **kwargs)
-        
-        return results
-        
-    def loss(self, trajectories, img_metas, **kwargs):
-        """Compute losses."""
-        losses = dict()
-        
-        # 궤적 예측 손실
-        loss_motion = self.loss_motion(trajectories, **kwargs)
-        losses['loss_motion'] = loss_motion
-        
-        return losses
-        
-    def get_trajectories(self, trajectories, img_metas, **kwargs):
-        """Get predicted trajectories."""
-        results = []
-        
-        # 각 이미지에 대해 처리
-        for img_id in range(len(img_metas)):
-            # 궤적 좌표
-            traj = trajectories[img_id]
-            
-            # 결과 저장
-            result = dict(
-                trajectories=traj
-            )
-            results.append(result)
-            
-        return results
-
-class MLP(nn.Module):
-    """Multi-layer perceptron."""
-    
-    def __init__(self, input_dim, hidden_dim, output_dim, num_layers):
-        super().__init__()
-        self.num_layers = num_layers
-        h = [hidden_dim] * (num_layers - 1)
-        self.layers = nn.ModuleList(
-            nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim])
-        )
-        
-    def forward(self, x):
-        for i, layer in enumerate(self.layers):
-            x = nn.functional.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
-        return x
+        self.use_nonlinear_optimizer = use_nonlinear_optimizer
+        self._load_anchors(anchor_info_path)
+        self._build_loss(loss_traj)
+        self._build_layers(transformerlayers, det_layer_num)
+        self._init_layers()
 
     def forward_train(self,
                       bev_embed,

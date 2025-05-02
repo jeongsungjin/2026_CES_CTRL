@@ -1,3 +1,5 @@
+import sys
+sys.path.insert(0, '/home/students/UniAD')
 import cv2
 import torch
 import argparse
@@ -188,6 +190,7 @@ class Visualizer:
                     command = outputs[k]['command'][0].cpu().detach().numpy()
                 else:
                     command = None
+                print(command)
                 planning_agent = AgentPredictionData(
                     track_scores[0],
                     track_labels,

@@ -6,7 +6,7 @@
 
 import torch
 import torch.nn as nn
-from mmcv.runner import auto_fp16, BaseModule
+from mmcv.runner import auto_fp16
 from mmdet.models import DETECTORS
 from mmdet3d.core import bbox3d2result
 from mmdet3d.core.bbox.coders import build_bbox_coder
@@ -21,62 +21,134 @@ from mmdet.models.utils.transformer import inverse_sigmoid
 from ..dense_heads.track_head_plugin import MemoryBank, QueryInteractionModule, Instances, RuntimeTrackerBase
 
 @DETECTORS.register_module()
-class UniADTrack(BaseModule):
-    """UniADTrack: Unified Autonomous Driving Tracking."""
+class UniADTrack(MVXTwoStageDetector):
+    """UniAD tracking part
+    """
+    def __init__(
+        self, 
+        use_grid_mask=False,
+        img_backbone=None,
+        img_neck=None,
+        pts_bbox_head=None,
+        train_cfg=None,
+        test_cfg=None,
+        pretrained=None,
+        video_test_mode=False,
+        loss_cfg=None,
+        qim_args=dict(
+            qim_type="QIMBase",
+            merger_dropout=0,
+            update_query_pos=False,
+            fp_ratio=0.3,
+            random_drop=0.1,
+        ),
+        mem_args=dict(
+            memory_bank_type="MemoryBank",
+            memory_bank_score_thresh=0.0,
+            memory_bank_len=4,
+        ),
+        bbox_coder=dict(
+            type="DETRTrack3DCoder",
+            post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
+            pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
+            max_num=300,
+            num_classes=10,
+            score_threshold=0.0,
+            with_nms=False,
+            iou_thres=0.3,
+        ),
+        pc_range=None,
+        embed_dims=256,
+        num_query=900,
+        num_classes=10,
+        vehicle_id_list=None,
+        score_thresh=0.2,
+        filter_score_thresh=0.1,
+        miss_tolerance=5,
+        gt_iou_threshold=0.0,
+        freeze_img_backbone=False,
+        freeze_img_neck=False,
+        freeze_bn=False,
+        freeze_bev_encoder=False,
+        queue_length=3,
+    ):
+        super(UniADTrack, self).__init__(
+            img_backbone=img_backbone,
+            img_neck=img_neck,
+            pts_bbox_head=pts_bbox_head,
+            train_cfg=train_cfg,
+            test_cfg=test_cfg,
+            pretrained=pretrained,
+        )
 
-    def __init__(self,
-                 backbone,
-                 neck=None,
-                 track_head=None,
-                 use_bev_input=False,
-                 bev_h=200,
-                 bev_w=200,
-                 train_cfg=None,
-                 test_cfg=None,
-                 init_cfg=None):
-        super().__init__(init_cfg)
-        self.backbone = backbone
-        self.neck = neck
-        self.track_head = track_head
-        self.use_bev_input = use_bev_input
-        self.bev_h = bev_h
-        self.bev_w = bev_w
-        self.train_cfg = train_cfg
-        self.test_cfg = test_cfg
+        self.grid_mask = GridMask(
+            True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7
+        )
+        self.use_grid_mask = use_grid_mask
+        self.fp16_enabled = False
+        self.embed_dims = embed_dims
+        self.num_query = num_query
+        self.num_classes = num_classes
+        self.vehicle_id_list = vehicle_id_list
+        self.pc_range = pc_range
+        self.queue_length = queue_length
+        if freeze_img_backbone:
+            if freeze_bn:
+                self.img_backbone.eval()
+            for param in self.img_backbone.parameters():
+                param.requires_grad = False
         
-    def forward_train(self, img, img_metas, **kwargs):
-        """Forward function for training."""
-        # BEV 입력 처리
-        if self.use_bev_input:
-            bev_embed = img
-        else:
-            # 기존 멀티 카메라 입력 처리
-            x = self.backbone(img)
-            if self.neck is not None:
-                x = self.neck(x)
-            bev_embed = x[-1]
-            
-        # Track Head
-        losses = self.track_head.forward_train(bev_embed, img_metas, **kwargs)
-        
-        return losses
-        
-    def forward_test(self, img, img_metas, **kwargs):
-        """Forward function for testing."""
-        # BEV 입력 처리
-        if self.use_bev_input:
-            bev_embed = img
-        else:
-            # 기존 멀티 카메라 입력 처리
-            x = self.backbone(img)
-            if self.neck is not None:
-                x = self.neck(x)
-            bev_embed = x[-1]
-            
-        # Track Head
-        results = self.track_head.forward_test(bev_embed, img_metas, **kwargs)
-        
-        return results
+        if freeze_img_neck:
+            if freeze_bn:
+                self.img_neck.eval()
+            for param in self.img_neck.parameters():
+                param.requires_grad = False
+
+        # temporal
+        self.video_test_mode = video_test_mode
+        assert self.video_test_mode
+
+        self.prev_frame_info = {
+            "prev_bev": None,
+            "scene_token": None,
+            "prev_pos": 0,
+            "prev_angle": 0,
+        }
+        self.query_embedding = nn.Embedding(self.num_query+1, self.embed_dims * 2)   # the final one is ego query, which constantly models ego-vehicle
+        self.reference_points = nn.Linear(self.embed_dims, 3)
+
+        self.mem_bank_len = mem_args["memory_bank_len"]
+        self.track_base = RuntimeTrackerBase(
+            score_thresh=score_thresh,
+            filter_score_thresh=filter_score_thresh,
+            miss_tolerance=miss_tolerance,
+        )  # hyper-param for removing inactive queries
+
+        self.query_interact = QueryInteractionModule(
+            qim_args,
+            dim_in=embed_dims,
+            hidden_dim=embed_dims,
+            dim_out=embed_dims,
+        )
+
+        self.bbox_coder = build_bbox_coder(bbox_coder)
+
+        self.memory_bank = MemoryBank(
+            mem_args,
+            dim_in=embed_dims,
+            hidden_dim=embed_dims,
+            dim_out=embed_dims,
+        )
+        self.mem_bank_len = (
+            0 if self.memory_bank is None else self.memory_bank.max_his_length
+        )
+        self.criterion = build_loss(loss_cfg)
+        self.test_track_instances = None
+        self.l2g_r_mat = None
+        self.l2g_t = None
+        self.gt_iou_threshold = gt_iou_threshold
+        self.bev_h, self.bev_w = self.pts_bbox_head.bev_h, self.pts_bbox_head.bev_w
+        self.freeze_bev_encoder = freeze_bev_encoder
 
     def extract_img_feat(self, img, len_queue=None):
         """Extract features of images."""
@@ -84,15 +156,31 @@ class UniADTrack(BaseModule):
             return None
         assert img.dim() == 5
         B, N, C, H, W = img.size()
+        
+        # 메모리 사용량 모니터링
+        print(f"Input shape: {img.shape}")
+        print(f"Memory usage before processing: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        
         img = img.reshape(B * N, C, H, W)
         if self.use_grid_mask:
             img = self.grid_mask(img)
+            
+        # 백본 처리 전 메모리 사용량
+        print(f"Memory before backbone: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        
         img_feats = self.img_backbone(img)
         if isinstance(img_feats, dict):
             img_feats = list(img_feats.values())
+            
+        # 백본 처리 후 메모리 사용량
+        print(f"Memory after backbone: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        
         if self.with_img_neck:
             img_feats = self.img_neck(img_feats)
-
+            
+        # Neck 처리 후 메모리 사용량
+        print(f"Memory after neck: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        
         img_feats_reshaped = []
         for img_feat in img_feats:
             _, c, h, w = img_feat.size()
@@ -101,6 +189,10 @@ class UniADTrack(BaseModule):
             else:
                 img_feat_reshaped = img_feat.view(B, N, c, h, w)
             img_feats_reshaped.append(img_feat_reshaped)
+            
+        # 최종 메모리 사용량
+        print(f"Final memory usage: {torch.cuda.memory_allocated() / 1024**2:.2f} MB")
+        
         return img_feats_reshaped
 
     def _generate_empty_tracks(self):
@@ -166,14 +258,13 @@ class UniADTrack(BaseModule):
     ):
         """
         Args:
-            ref_pts (Tensor): (num_query, 3).  in inevrse sigmoid space
+            ref_pts (Tensor): (num_query, 3).  in inverse sigmoid space
             velocity (Tensor): (num_query, 2). m/s
                 in lidar frame. vx, vy
             global2lidar (np.Array) [4,4].
         Outs:
-            ref_pts (Tensor): (num_query, 3).  in inevrse sigmoid space
+            ref_pts (Tensor): (num_query, 3).  in inverse sigmoid space
         """
-        # print(l2g_r1.type(), l2g_t1.type(), ref_pts.type())
         time_delta = time_delta.type(torch.float)
         num_query = ref_pts.size(0)
         velo_pad_ = velocity.new_zeros((num_query, 1))
@@ -195,7 +286,8 @@ class UniADTrack(BaseModule):
 
         ref_pts = reference_points @ l2g_r1 + l2g_t1 - l2g_t2
 
-        g2l_r = torch.linalg.inv(l2g_r2).type(torch.float)
+        # Use pseudo-inverse (pinverse) instead of inv for numerical stability
+        g2l_r = torch.linalg.inv(l2g_r2.cpu()).type(torch.float).cuda(0)
 
         ref_pts = ref_pts @ g2l_r
 
@@ -260,27 +352,21 @@ class UniADTrack(BaseModule):
                     prev_bev=prev_bev)
         self.train()
         return prev_bev
-
+   
     # Generate bev using bev_encoder in BEVFormer
     def get_bevs(self, imgs, img_metas, prev_img=None, prev_img_metas=None, prev_bev=None):
-        if self.use_bev_input:
-            # BEV 이미지가 직접 입력으로 들어오는 경우
-            bev_embed = imgs  # imgs는 이미 BEV 이미지
-            bev_pos = None  # 위치 임베딩은 필요 없음
-        else:
-            # 기존의 다중 카메라 입력 처리
-            if prev_img is not None and prev_img_metas is not None:
-                assert prev_bev is None
-                prev_bev = self.get_history_bev(prev_img, prev_img_metas)
+        if prev_img is not None and prev_img_metas is not None:
+            assert prev_bev is None
+            prev_bev = self.get_history_bev(prev_img, prev_img_metas)
 
-            img_feats = self.extract_img_feat(img=imgs)
-            if self.freeze_bev_encoder:
-                with torch.no_grad():
-                    bev_embed, bev_pos = self.pts_bbox_head.get_bev_features(
-                        mlvl_feats=img_feats, img_metas=img_metas, prev_bev=prev_bev)
-            else:
+        img_feats = self.extract_img_feat(img=imgs)
+        if self.freeze_bev_encoder:
+            with torch.no_grad():
                 bev_embed, bev_pos = self.pts_bbox_head.get_bev_features(
-                        mlvl_feats=img_feats, img_metas=img_metas, prev_bev=prev_bev)
+                    mlvl_feats=img_feats, img_metas=img_metas, prev_bev=prev_bev)
+        else:
+            bev_embed, bev_pos = self.pts_bbox_head.get_bev_features(
+                    mlvl_feats=img_feats, img_metas=img_metas, prev_bev=prev_bev)
         
         if bev_embed.shape[1] == self.bev_h * self.bev_w:
             bev_embed = bev_embed.permute(1, 0, 2)
@@ -781,4 +867,28 @@ class UniADTrack(BaseModule):
             result_dict = None
 
         return [result_dict]
+
+    def test_memory_usage(self, img):
+        """Test memory usage with a single image."""
+        try:
+            # 메모리 초기화
+            torch.cuda.empty_cache()
+            initial_memory = torch.cuda.memory_allocated()
+            
+            # 특징 추출 테스트
+            features = self.extract_img_feat(img)
+            
+            # 메모리 사용량 계산
+            final_memory = torch.cuda.memory_allocated()
+            memory_used = (final_memory - initial_memory) / 1024**2  # MB 단위
+            
+            print(f"Memory used for feature extraction: {memory_used:.2f} MB")
+            print(f"Input shape: {img.shape}")
+            print(f"Feature shapes: {[f.shape for f in features]}")
+            
+            return memory_used < 10240  # 10GB 미만이면 True
+            
+        except RuntimeError as e:
+            print(f"Memory error: {e}")
+            return False
 
