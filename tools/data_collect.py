@@ -12,6 +12,10 @@ import h5py
 import laspy
 from utils import build_projection_matrix, convert_depth, get_relative_transform, normalize_angle, build_skeleton,  get_matrix, calculate_cube_vertices, compute_2d_distance
 from utils import DIS_CAR_SAVE, DIS_WALKER_SAVE, DIS_SIGN_SAVE, DIS_LIGHT_SAVE
+import os
+import glob
+import sys
+import time
 
 EARTH_RADIUS_EQUA = 6378137.0
 
@@ -1675,3 +1679,51 @@ class Env_Manager():
                             if '+lon_0' in item:
                                 lon_ref = float(item.split('=')[1])
         return lat_ref, lon_ref
+
+# 저장 경로
+SAVE_ROOT = '/home/ctrl2/Bench2Drive/data_collect_output/camera'
+
+# 폴더 생성
+os.makedirs(f"{SAVE_ROOT}/rgb_front", exist_ok=True)
+os.makedirs(f"{SAVE_ROOT}/rgb_front_left", exist_ok=True)
+os.makedirs(f"{SAVE_ROOT}/rgb_front_right", exist_ok=True)
+os.makedirs(f"{SAVE_ROOT}/rgb_back", exist_ok=True)
+os.makedirs(f"{SAVE_ROOT}/rgb_back_left", exist_ok=True)
+os.makedirs(f"{SAVE_ROOT}/rgb_back_right", exist_ok=True)
+
+# CARLA 클라이언트 연결
+client = carla.Client('localhost', 2000)
+client.set_timeout(10.0)
+world = client.get_world()
+
+# 에고 차량 및 카메라 센서 찾기
+vehicle = world.get_actors().filter('vehicle.*')[0]  # 첫 번째 차량 사용
+camera_names = [
+    'CAM_FRONT', 'CAM_FRONT_LEFT', 'CAM_FRONT_RIGHT',
+    'CAM_BACK', 'CAM_BACK_LEFT', 'CAM_BACK_RIGHT'
+]
+
+# 센서 데이터 콜백
+def save_image(image, cam_name, frame):
+    array = np.frombuffer(image.raw_data, dtype=np.uint8)
+    array = array.reshape((image.height, image.width, 4))[:, :, :3]
+    cv2.imwrite(f"{SAVE_ROOT}/{cam_name}/frame_{frame:05d}.jpg", array)
+
+# 센서 등록 및 데이터 저장
+sensors = []
+frame = 0
+for cam_name in camera_names:
+    sensor = [x for x in world.get_actors().filter('sensor.camera.rgb') if x.attributes.get('role_name') == cam_name]
+    if sensor:
+        sensor = sensor[0]
+        sensor.listen(lambda image, cam_name=cam_name: save_image(image, cam_name, image.frame))
+        sensors.append(sensor)
+
+print("카메라 데이터 저장 중... (Ctrl+C로 중지)")
+try:
+    while True:
+        pass
+except KeyboardInterrupt:
+    for sensor in sensors:
+        sensor.stop()
+    print("저장 종료")
