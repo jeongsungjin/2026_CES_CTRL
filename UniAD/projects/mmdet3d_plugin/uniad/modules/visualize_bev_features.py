@@ -3,7 +3,13 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import torchvision.transforms as T
-from .custom_bev_backbone import CustomBEVModel
+import os
+import sys
+
+# Add the project root to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))))
+
+from projects.mmdet3d_plugin.uniad.modules.custom_bev_backbone import CustomBEVModel
 
 def visualize_features(image_path):
     # 모델 초기화
@@ -17,6 +23,9 @@ def visualize_features(image_path):
     )
     model.eval()
 
+    print(f"Loading image from: {image_path}")
+    print(f"Image exists: {os.path.exists(image_path)}")
+    
     # 이미지 로드 및 전처리
     img = Image.open(image_path)
     transform = T.Compose([
@@ -25,9 +34,17 @@ def visualize_features(image_path):
     ])
     img_tensor = transform(img).unsqueeze(0)  # [1, 3, 200, 200]
 
+    print(f"Input tensor shape: {img_tensor.shape}")
+
     # 특징 추출
     with torch.no_grad():
         features = model(img_tensor)  # [1, 256, 25, 25]
+    
+    print(f"Feature tensor shape: {features.shape}")
+
+    # 결과 저장 디렉토리 생성
+    save_dir = os.path.join(os.path.dirname(image_path), 'feature_visualization')
+    os.makedirs(save_dir, exist_ok=True)
 
     # 시각화
     plt.figure(figsize=(15, 5))
@@ -55,7 +72,8 @@ def visualize_features(image_path):
     plt.axis('off')
     
     plt.tight_layout()
-    plt.show()
+    plt.savefig(os.path.join(save_dir, 'feature_summary.png'))
+    plt.close()
 
     # 채널별 특징맵 시각화 (상위 16개 채널)
     plt.figure(figsize=(20, 20))
@@ -66,9 +84,11 @@ def visualize_features(image_path):
         plt.axis('off')
     
     plt.tight_layout()
-    plt.show()
+    plt.savefig(os.path.join(save_dir, 'feature_channels.png'))
+    plt.close()
+
+    print(f"Visualization results saved in: {save_dir}")
 
 if __name__ == "__main__":
-    # BEV 이미지 경로를 지정해주세요
-    image_path = "path/to/your/bev_image.png"  
+    image_path = "/Users/seongjinjeong/2026_CES_CTRL/UniAD/CARLA-simulation-platform-a-CARLA-vehicle-camera-view-with-pedestrian-in-frame-b-CARLA.ppm"
     visualize_features(image_path) 
