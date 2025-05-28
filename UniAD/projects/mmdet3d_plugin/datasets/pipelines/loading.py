@@ -45,7 +45,11 @@ class LoadMultiViewImageFromFilesInCeph(object):
         images_multiView = []
         filename = results['img_filename']
         for img_path in filename:
-            img_path = os.path.join(self.img_root, img_path)
+            # 이미 절대 경로인 경우 그대로 사용, 아니면 img_root와 결합
+            if not os.path.isabs(img_path):
+                img_path = os.path.join(self.img_root, img_path)
+            # 경로 출력으로 디버깅 
+            print(f"Loading image from: {img_path}")
             if self.file_client_args['backend'] == 'petrel':
                 img_bytes = self.file_client.get(img_path)
                 img = mmcv.imfrombytes(img_bytes)

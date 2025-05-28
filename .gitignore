@@ -1,0 +1,4 @@
+my_bev/checkpoints/
+my_bev/inference_results/
+my_bev/_out_bev_all_outputs/
+my_bev/visualizations/

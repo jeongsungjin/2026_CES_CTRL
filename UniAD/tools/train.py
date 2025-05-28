@@ -1,3 +1,6 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+# Copyright (c) OpenMMLab. All rights reserved.
 from __future__ import division
 
 import argparse
@@ -21,6 +24,12 @@ from mmdet3d.models import build_model
 from mmdet3d.utils import collect_env, get_root_logger
 from mmdet.apis import set_random_seed
 from mmseg import __version__ as mmseg_version
+
+import sys
+# 현재 디렉토리를 파이썬 경로에 추가
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
+from projects.mmdet3d_plugin.datasets.builder import build_dataloader
 
 warnings.filterwarnings("ignore")
 

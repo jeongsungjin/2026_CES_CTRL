@@ -1,25 +1,33 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+# Copyright (c) OpenMMLab. All rights reserved.
 import argparse
-import cv2
-import torch
-import sklearn
-import mmcv
+import copy
 import os
+import time
 import warnings
-from mmcv import Config, DictAction
-from mmcv.cnn import fuse_conv_bn
-from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
-from mmcv.runner import (get_dist_info, init_dist, load_checkpoint,
-                         wrap_fp16_model)
+from os import path as osp
 
-from mmdet3d.apis import single_gpu_test
-from mmdet3d.datasets import build_dataset
+import mmcv
+import torch
+from mmcv import Config, DictAction
+from mmcv.parallel import MMDataParallel, MMDistributedDataParallel
+from mmcv.runner import get_dist_info, init_dist, load_checkpoint, wrap_fp16_model
+
+import sys
+# 현재 디렉토리를 파이썬 경로에 추가
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
+
+# 이제 projects를 상대 경로가 아닌 경로가 추가된 방식으로 임포트
 from projects.mmdet3d_plugin.datasets.builder import build_dataloader
+# custom_dataset 모듈은 존재하지 않으므로 제거
+from mmdet3d.datasets import build_dataset
 from mmdet3d.models import build_model
 from mmdet.apis import set_random_seed
-from projects.mmdet3d_plugin.uniad.apis.test import custom_multi_gpu_test
 from mmdet.datasets import replace_ImageToTensor
-import time
-import os.path as osp
+from mmdet3d.apis import single_gpu_test
+from mmdet3d.utils import get_root_logger
+from projects.mmdet3d_plugin.uniad.apis.test import custom_multi_gpu_test
 
 warnings.filterwarnings("ignore")
 

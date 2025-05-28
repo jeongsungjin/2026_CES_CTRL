@@ -147,9 +147,13 @@ class NuScenesE2EDataset(NuScenesDataset):
         Returns:
             list[dict]: List of annotations sorted by timestamps.
         """
+        # 파일이 이미 열린 경우 파일 경로만 추출
+        if hasattr(ann_file, 'name'):
+            ann_file = ann_file.name
+            
         if self.file_client_args['backend'] == 'disk':
             # data_infos = mmcv.load(ann_file)
-            data = pickle.loads(self.file_client.get(ann_file))  # ann_file을 바로 사용
+            data = pickle.loads(self.file_client.get(ann_file))
             data_infos = list(
                 sorted(data['infos'], key=lambda e: e['timestamp']))
             data_infos = data_infos[::self.load_interval]
